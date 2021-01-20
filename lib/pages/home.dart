@@ -1,8 +1,11 @@
 import 'dart:io';
 
 import 'package:app_flutter/models/band.dart';
+import 'package:app_flutter/services/socket_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:pie_chart/pie_chart.dart';
+import 'package:provider/provider.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key key}) : super(key: key);
@@ -13,14 +16,39 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   List<Band> bands = [
-    Band(id: '1', name: 'Metalica', votes: 5),
-    Band(id: '2', name: 'Queen', votes: 3),
-    Band(id: '3', name: 'Heroes del Silencio', votes: 10),
-    Band(id: '4', name: 'Bon Jovi', votes: 8),
+    // Band(id: '1', name: 'Metalica', votes: 5),
+    // Band(id: '2', name: 'Queen', votes: 3),
+    // Band(id: '3', name: 'Heroes del Silencio', votes: 10),
+    // Band(id: '4', name: 'Bon Jovi', votes: 8),
   ];
 
   @override
+  void initState() {
+    final socketService = Provider.of<SocketService>(context, listen: false);
+    socketService.socket.on('active-bands', _handleActiveBands);
+    super.initState();
+  }
+
+  _handleActiveBands(dynamic payload) {
+    this.bands = (payload)
+        .map(
+          (band) => {Band.formMap(band)},
+        )
+        .toList();
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    final socketService = Provider.of<SocketService>(context, listen: false);
+    socketService.socket.off('active-bands');
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final socketService = Provider.of<SocketService>(context);
+
     return Scaffold(
       appBar: AppBar(
         elevation: 1,
@@ -30,12 +58,33 @@ class _HomePageState extends State<HomePage> {
             color: Colors.black87,
           ),
         ),
+        actions: [
+          Container(
+            margin: EdgeInsets.only(right: 10),
+            child: socketService.serverStatus == ServerStatus.Online
+                ? Icon(
+                    Icons.check_circle,
+                    color: Colors.blue[300],
+                  )
+                : Icon(
+                    Icons.offline_bolt,
+                    color: Colors.red[300],
+                  ),
+          ),
+        ],
         backgroundColor: Colors.white,
       ),
-      body: ListView.builder(
-        itemCount: bands.length,
-        itemBuilder: (BuildContext context, int index) =>
-            _buildListTile(bands[index]),
+      body: Column(
+        children: [
+          _showGraph(),
+          Expanded(
+            child: ListView.builder(
+              itemCount: bands.length,
+              itemBuilder: (BuildContext context, int index) =>
+                  _buildListTile(bands[index]),
+            ),
+          )
+        ],
       ),
       floatingActionButton: _buildFloatingActionButton(),
     );
@@ -49,12 +98,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildListTile(Band band) {
+    final socketService = Provider.of<SocketService>(context, listen: false);
     return Dismissible(
       key: Key(band.id),
       direction: DismissDirection.startToEnd,
-      onDismissed: (direction) {
-        //TODO: BORRAR EN EL BAC
-      },
+      onDismissed: (direction) =>
+          socketService.emit('delete-band', {'id': band.id}),
       background: Container(
         color: Colors.red,
         child: Align(
@@ -79,9 +128,7 @@ class _HomePageState extends State<HomePage> {
           '${band.votes}',
           style: TextStyle(fontSize: 18),
         ),
-        onTap: () {
-          print(band.name);
-        },
+        onTap: () => socketService.emit('vote-band', {'id': band.id}),
       ),
     );
   }
@@ -91,22 +138,20 @@ class _HomePageState extends State<HomePage> {
     if (Platform.isAndroid) {
       return showDialog(
           context: context,
-          builder: (contest) {
-            return AlertDialog(
-              title: Text('New Band Name'),
-              content: TextField(
-                controller: textEditingController,
-              ),
-              actions: [
-                MaterialButton(
-                  child: Text('Add'),
-                  elevation: 5,
-                  textColor: Colors.blue,
-                  onPressed: () => addBandToList(textEditingController.text),
-                )
-              ],
-            );
-          });
+          builder: (_) => AlertDialog(
+                title: Text('New Band Name'),
+                content: TextField(
+                  controller: textEditingController,
+                ),
+                actions: [
+                  MaterialButton(
+                    child: Text('Add'),
+                    elevation: 5,
+                    textColor: Colors.blue,
+                    onPressed: () => addBandToList(textEditingController.text),
+                  )
+                ],
+              ));
     }
 
     showCupertinoDialog(
@@ -135,16 +180,60 @@ class _HomePageState extends State<HomePage> {
 
   void addBandToList(String name) {
     if (name.length > 1) {
-      //se agrega
-      this.bands.add(
-            new Band(
-              id: DateTime.now().toString(),
-              name: name,
-              votes: 0,
-            ),
-          );
+      final socketService = Provider.of<SocketService>(context, listen: false);
+      socketService.emit('add-band', {'name': name});
       setState(() {});
     }
     Navigator.pop(context);
+  }
+
+  //MOSTAR GRAFICO
+  _showGraph() {
+    Map<String, double> dataMap = new Map();
+    //dataMap.putIfAbsent('Flutter', () => 5);
+
+    bands.forEach((band) {
+      dataMap.putIfAbsent(band.name, () => band.votes.toDouble());
+    });
+
+    final List<Color> colorList = [
+      Colors.blue[50],
+      Colors.blue[200],
+      Colors.pink[50],
+      Colors.pink[200],
+      Colors.yellow[50],
+      Colors.yellow[200],
+    ];
+
+    return Container(
+      width: double.infinity,
+      height: 200,
+      child: PieChart(
+        dataMap: dataMap,
+        animationDuration: Duration(milliseconds: 800),
+        chartLegendSpacing: 32,
+        chartRadius: MediaQuery.of(context).size.width / 3.2,
+        colorList: colorList,
+        initialAngleInDegree: 0,
+        chartType: ChartType.ring,
+        ringStrokeWidth: 32,
+        centerText: "HYBRID",
+        legendOptions: LegendOptions(
+          showLegendsInRow: false,
+          legendPosition: LegendPosition.right,
+          showLegends: true,
+          //legendShape: _BoxShape.circle,
+          legendTextStyle: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        chartValuesOptions: ChartValuesOptions(
+          showChartValueBackground: true,
+          showChartValues: true,
+          showChartValuesInPercentage: false,
+          showChartValuesOutside: false,
+        ),
+      ),
+    );
   }
 }
